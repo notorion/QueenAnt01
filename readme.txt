@@ -2,12 +2,14 @@ Implemented new Queen Ant GrandBoss fight mechanics.
 
 Hi!
 This is the Queen Ant mechanics, based on live checks on the official server, Chronos.
-Shinemaker:
-Respawn at 9pm on Mondays.
+[s]Return of The Queen Ant - Monday - Tuesday is in 9pm.
+Hero’s Tome time respawn 10/2022 Queen Ant Monday 9pm[/s]
+
+The script is only configured for the time of day Shinemaker: Respawn at 8pm on Mondays.
 
 The battle:
 Queen Ant is protected by a barrier, to destroy it requires 2000 attacks in 10 minutes. The barrier can return during the battle.
-[img]https://github.com/notorion/QueenAnt01/blob/main/%7B6ED9DA26-698C-4F52-9C4A-4167EADCCB8C%7D.png?raw=true[/img]
+https://github.com/notorion/QueenAnt01/blob/main/%7B6ED9DA26-698C-4F52-9C4A-4167EADCCB8C%7D.png?raw=true
 Queen Ant has two powerful initial attacks, I could see top players fall easily.
 
 Queen Rage is a long-range targeted attack.
@@ -15,7 +17,7 @@ Queen Rage is a long-range targeted attack.
 Ground Shaker is an area-of-effect attack that deals stun + damage.
 
 At some point, when the Queen Ant has a certain HP, she will become furious, but unfortunately she will not call the worker ants. She will dig her claws into the ground and summon 'eruptions' on the ground. It is time for the player to move far away, because several tornadoes will emerge from there around the Queen Ant, causing significant damage.
-[img]https://github.com/notorion/QueenAnt01/blob/main/%7B7CA84ED8-8991-405B-BC89-AEB7350CD518%7D.png?raw=true[/img]
+https://github.com/notorion/QueenAnt01/blob/main/%7B7CA84ED8-8991-405B-BC89-AEB7350CD518%7D.png?raw=true
 
 There is no way for the player to stand still.
 
@@ -38,7 +40,7 @@ Modify the following:
 Table grandboss_data
 respawn_time leave the value 0.
 and save.
-[img]https://github.com/notorion/QueenAnt01/blob/main/db%20grandboss_data.jpg?raw=true[/img]
+https://github.com/notorion/QueenAnt01/blob/main/db%20grandboss_data.jpg?raw=true
 The script was written together with the grandboss table.
 
 Before making it live, I test it to see how it behaves on your server.
