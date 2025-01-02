@@ -1,0 +1,924 @@
+### Eclipse Workspace Patch 1.0
+#P Shinemaker
+diff --git L2J_Mobius_11.3_Shinemaker/dist/game/data/scripts/ai/bosses/QueenAnt/QueenAnt.java L2J_Mobius_11.3_Shinemaker/dist/game/data/scripts/ai/bosses/QueenAnt/QueenAnt.java
+index f5c9d7d..121816a 100644
+--- L2J_Mobius_11.3_Shinemaker/dist/game/data/scripts/ai/bosses/QueenAnt/QueenAnt.java
++++ L2J_Mobius_11.3_Shinemaker/dist/game/data/scripts/ai/bosses/QueenAnt/QueenAnt.java
+@@ -1,156 +1,545 @@
+ /*
+- * Copyright (c) 2013 L2jMobius
++ * This file is part of the L2J Mobius project.
+  * 
+- * Permission is hereby granted, free of charge, to any person obtaining a copy
+- * of this software and associated documentation files (the "Software"), to deal
+- * in the Software without restriction, including without limitation the rights
+- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+- * copies of the Software, and to permit persons to whom the Software is
+- * furnished to do so, subject to the following conditions:
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
+  * 
+- * The above copyright notice and this permission notice shall be
+- * included in all copies or substantial portions of the Software.
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
+  * 
+- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+- * IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ * You should have received a copy of the GNU General Public License
++ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+  */
+ package ai.bosses.QueenAnt;
+ 
+-import org.l2jmobius.Config;
++import java.util.ArrayList;
++import java.util.Calendar;
++import java.util.List;
++import java.util.Map;
++import java.util.concurrent.ConcurrentHashMap;
++import java.util.concurrent.atomic.AtomicBoolean;
++
++import org.l2jmobius.commons.threads.ThreadPool;
++import org.l2jmobius.gameserver.data.xml.NpcData;
++import org.l2jmobius.gameserver.enums.SkillFinishType;
++import org.l2jmobius.gameserver.instancemanager.DBSpawnManager;
++import org.l2jmobius.gameserver.instancemanager.GlobalVariablesManager;
+ import org.l2jmobius.gameserver.instancemanager.GrandBossManager;
+-import org.l2jmobius.gameserver.model.StatSet;
++import org.l2jmobius.gameserver.instancemanager.ZoneManager;
++import org.l2jmobius.gameserver.model.CommandChannel;
++import org.l2jmobius.gameserver.model.Location;
++import org.l2jmobius.gameserver.model.Party;
++import org.l2jmobius.gameserver.model.Spawn;
+ import org.l2jmobius.gameserver.model.actor.Npc;
+ import org.l2jmobius.gameserver.model.actor.Player;
+ import org.l2jmobius.gameserver.model.actor.instance.GrandBoss;
+-import org.l2jmobius.gameserver.network.serverpackets.PlaySound;
++import org.l2jmobius.gameserver.model.actor.templates.NpcTemplate;
++import org.l2jmobius.gameserver.model.holders.SkillHolder;
++import org.l2jmobius.gameserver.model.skill.Skill;
++import org.l2jmobius.gameserver.model.skill.SkillCaster;
++import org.l2jmobius.gameserver.model.zone.type.ArenaZone;
+ 
+ import ai.AbstractNpcAI;
+ 
+ /**
+- * Queen Ant's AI
+- * @author Mobius
++ * @author Notorion
+  */
+ public class QueenAnt extends AbstractNpcAI
+ {
+-	// NPC
+-	private static final int QUEEN_ANT = 29381;
+-	// Status
+-	private static final byte ALIVE = 0; // Queen Ant is spawned.
+-	private static final byte DEAD = 1; // Queen Ant has been killed.
+-	// Location
+-	private static final int QUEEN_X = -6505;
+-	private static final int QUEEN_Y = 183040;
+-	private static final int QUEEN_Z = -3419;
++	
++	private static final int MAIN_BOSS_ID = 29381; // Queen Ant
++	private static final int INVISIBLE_NPC = 18919;
++	private static final int NPC_LIFETIME = 9000;
++	private static final int REQUIRED_CC_MEMBERS = 14; // Number of Players in Command Channel
++	// Barrier
++	private static final int BARRIER_DURATION_MILLIS = 600000; // 10 minutes
++	private static final int HIT_COUNT = 2000; // 2000 Number of attacks needed to destroy the barrier
++	private static final int HIT_COUNT_RENEW = 500; // 500 hits in 60 seconds to continue without the barrier, Not confirmed
++	private static final int RENEW_DURATION_MILLIS = 600000; // 60 seconds of vulnerability, Not confirmed
++	
++	private static final Location GLUDIO_LOCATION = new Location(-14608, 123920, -3123);
++	private static final Location SPAWN_LOCATION = new Location(-7848, 183389, -3624);
++	
++	private static final SkillHolder AREA_SKILL = new SkillHolder(33918, 1);
++	private static final SkillHolder COMMON_SKILL_1 = new SkillHolder(33915, 1);
++	private static final SkillHolder COMMON_SKILL_2 = new SkillHolder(33916, 1);
++	private static final SkillHolder INITIAL_SKILL = new SkillHolder(33917, 1);
++	private static final SkillHolder LIMIT_BARRIER = new SkillHolder(29515, 1);
++	
++	private static GrandBoss spawnedMainBoss;
++	
++	private boolean barrierActivated = false;
++	private boolean bossInCombat = false;
++	private boolean hp85Reached = false;
++	private boolean isDebuffImmunityActive = false;
++	private boolean vulnerablePhase = false;
++	
++	private final AtomicBoolean canUseSkill = new AtomicBoolean(true);
++	private final AtomicBoolean isUsingAreaSkill = new AtomicBoolean(false);
++	
++	private long lastAttackTime = 0;
++	
++	private final Map<Npc, Integer> queenAntHits = new ConcurrentHashMap<>();
+ 	
+ 	private QueenAnt()
+ 	{
+-		addKillId(QUEEN_ANT);
+-		addSpawnId(QUEEN_ANT);
+-		
+-		final StatSet info = GrandBossManager.getInstance().getStatSet(QUEEN_ANT);
+-		if (GrandBossManager.getInstance().getStatus(QUEEN_ANT) == DEAD)
++		addAttackId(MAIN_BOSS_ID);
++		addSpawnId(MAIN_BOSS_ID);
++		addKillId(MAIN_BOSS_ID);
++		addAggroRangeEnterId(MAIN_BOSS_ID);
++		startQuestTimer("check_arena", 5000, null, null, true);
++		initializeRespawn();
++	}
++	
++	private void initializeRespawn()
++	{
++		try
+ 		{
+-			// Load the unlock date and time for queen ant from DB.
+-			final long temp = info.getLong("respawn_time") - System.currentTimeMillis();
+-			if (temp > 0) // If queen ant is locked until a certain time, mark it so and start the unlock timer the unlock time has not yet expired.
++			int status = GrandBossManager.getInstance().getStatus(MAIN_BOSS_ID);
++			
++			if (status == 0)
+ 			{
+-				startQuestTimer("queen_unlock", temp, null, null);
++				// LOGGER.info("Queen Ant: Detected alive in database. Respawning...");
++				spawnQueenAnt();
+ 			}
+-			else // The time has already expired while the server was offline. Immediately spawn queen ant.
++			else if (status == 1)
+ 			{
+-				final GrandBoss queen = (GrandBoss) addSpawn(QUEEN_ANT, QUEEN_X, QUEEN_Y, QUEEN_Z, 0, false, 0);
+-				GrandBossManager.getInstance().setStatus(QUEEN_ANT, ALIVE);
+-				spawnBoss(queen);
++				// LOGGER.info("Queen Ant: Detected dead in database. Scheduling next respawn...");
++				scheduleNextRespawn();
++			}
++			else
++			{
++				// LOGGER.warning("Queen Ant: Unknown status in database! Defaulting to respawn schedule.");
++				scheduleNextRespawn();
+ 			}
+ 		}
+-		else
++		catch (Exception e)
+ 		{
+-			int locX = info.getInt("loc_x");
+-			int locY = info.getInt("loc_y");
+-			int locZ = info.getInt("loc_z");
+-			final int heading = info.getInt("heading");
+-			final double hp = info.getDouble("currentHP");
+-			final double mp = info.getDouble("currentMP");
+-			final GrandBoss queen = (GrandBoss) addSpawn(QUEEN_ANT, locX, locY, locZ, heading, false, 0);
+-			queen.setCurrentHpMp(hp, mp);
+-			spawnBoss(queen);
++			LOGGER.severe("Queen Ant: Error during initialization: " + e.getMessage());
+ 		}
+ 	}
+ 	
+-	@Override
+-	public String onEvent(String event, Npc npc, Player player)
++	private void scheduleNextRespawn()
+ 	{
+-		switch (event)
++		final long currentTime = System.currentTimeMillis();
++		final Calendar nextRespawn = getNextRespawnTime();
++		final long delay = nextRespawn.getTimeInMillis() - currentTime;
++		
++		LOGGER.info("Queen Ant: Next respawn scheduled for " + nextRespawn.getTime() + " in " + delay + "ms");
++		
++		ThreadPool.schedule(() ->
+ 		{
+-			case "queen_unlock":
++			if (GrandBossManager.getInstance().getStatus(MAIN_BOSS_ID) == 1)
+ 			{
+-				final GrandBoss queen = (GrandBoss) addSpawn(QUEEN_ANT, QUEEN_X, QUEEN_Y, QUEEN_Z, 0, false, 0);
+-				GrandBossManager.getInstance().setStatus(QUEEN_ANT, ALIVE);
+-				spawnBoss(queen);
+-				break;
++				spawnQueenAnt();
+ 			}
+-			case "DISTANCE_CHECK":
++			else
+ 			{
+-				if ((npc == null) || npc.isDead())
+-				{
+-					cancelQuestTimers("DISTANCE_CHECK");
+-				}
+-				else if (npc.calculateDistance2D(npc.getSpawn()) > 6000)
+-				{
+-					npc.asAttackable().clearAggroList();
+-					npc.teleToLocation(QUEEN_X, QUEEN_Y, QUEEN_Z);
+-					npc.setCurrentHp(npc.getMaxHp());
+-					npc.setCurrentMp(npc.getMaxMp());
+-				}
+-				break;
++				// LOGGER.info("Queen Ant: Boss is already alive. Skipping spawn.");
+ 			}
+-		}
+-		return super.onEvent(event, npc, player);
++		}, delay);
+ 	}
+ 	
+-	@Override
+-	public String onKill(Npc npc, Player killer, boolean isSummon)
++	private void spawnQueenAnt()
+ 	{
+-		npc.broadcastPacket(new PlaySound(1, "BS02_D", 1, npc.getObjectId(), npc.getX(), npc.getY(), npc.getZ()));
+-		GrandBossManager.getInstance().setStatus(QUEEN_ANT, DEAD);
++		try
++		{
++			if ((spawnedMainBoss != null) && !spawnedMainBoss.isDead())
++			{
++				// LOGGER.warning("Queen Ant: Attempted to spawn while boss is already alive!");
++				return;
++			}
++			NpcTemplate template = NpcData.getInstance().getTemplate(MAIN_BOSS_ID);
++			Spawn spawn = new Spawn(template);
++			spawn.setXYZ(SPAWN_LOCATION);
++			spawn.setHeading(0);
++			spawn.setRespawnDelay(0);
++			
++			Npc boss = DBSpawnManager.getInstance().addNewSpawn(spawn, false);
++			spawnedMainBoss = (GrandBoss) boss;
++			GrandBossManager.getInstance().setStatus(MAIN_BOSS_ID, 0);
++			LOGGER.info("Queen Ant: Boss spawned successfully at " + SPAWN_LOCATION);
++			boss.setRandomWalking(false);
++			boss.setRandomAnimation(false);
++		}
++		catch (Exception e)
++		{
++			LOGGER.severe("Queen Ant: Error spawning boss: " + e.getMessage());
++		}
++	}
++	
++	// Return of The Queen Ant - Monday - Tuesday is in 9pm
++	// Hero’s Tome time respawn 10/2022 Queen Ant Monday 9pm
++	// Shinemaker - Monday 8pm
++	private Calendar getNextRespawnTime()
++	{
++		final Calendar nextRespawn = Calendar.getInstance();
+ 		
+-		// Calculate Min and Max respawn times randomly.
+-		final long baseIntervalMillis = Config.QUEEN_ANT_SPAWN_INTERVAL * 3600000;
+-		final long randomRangeMillis = Config.QUEEN_ANT_SPAWN_RANDOM * 3600000;
+-		final long respawnTime = baseIntervalMillis + getRandom(-randomRangeMillis, randomRangeMillis);
+-		startQuestTimer("queen_unlock", respawnTime, null, null);
++		// Spawn Queen Ant Monday 8pm Night*
++		nextRespawn.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY);
++		nextRespawn.set(Calendar.HOUR_OF_DAY, 20);
++		nextRespawn.set(Calendar.MINUTE, 0);
++		nextRespawn.set(Calendar.SECOND, 0);
++		if (nextRespawn.getTimeInMillis() < System.currentTimeMillis())
++		{
++			nextRespawn.add(Calendar.WEEK_OF_YEAR, 1);
++		}
+ 		
+-		// Also save the respawn time so that the info is maintained past restarts.
+-		final StatSet info = GrandBossManager.getInstance().getStatSet(QUEEN_ANT);
+-		info.set("respawn_time", System.currentTimeMillis() + respawnTime);
+-		GrandBossManager.getInstance().setStatSet(QUEEN_ANT, info);
+-		
+-		// Stop distance check task.
+-		cancelQuestTimers("DISTANCE_CHECK");
+-		
+-		return super.onKill(npc, killer, isSummon);
++		return nextRespawn;
+ 	}
+ 	
+ 	@Override
+ 	public String onSpawn(Npc npc)
+ 	{
+-		cancelQuestTimer("DISTANCE_CHECK", npc, null);
+-		startQuestTimer("DISTANCE_CHECK", 5000, npc, null, true);
++		if (npc.getId() == MAIN_BOSS_ID)
++		{
++			startQuestTimer("checkCombatStatus", 1000, npc, null, true);
++		}
+ 		return super.onSpawn(npc);
+ 	}
+ 	
+-	private void spawnBoss(GrandBoss npc)
++	@Override
++	public String onAggroRangeEnter(Npc npc, Player player, boolean isSummon)
+ 	{
+-		GrandBossManager.getInstance().addBoss(npc);
+-		npc.broadcastPacket(new PlaySound(1, "BS01_A", 1, npc.getObjectId(), npc.getX(), npc.getY(), npc.getZ()));
++		if (npc.getId() == MAIN_BOSS_ID)
++		{
++			bossInCombat = true;
++			checkCombatStatus(npc);
++			if (hp85Reached && (npc.getCurrentHp() < (npc.getMaxHp() * 0.85)))
++			{
++				activateSpecialMechanics(npc);
++			}
++		}
++		return super.onAggroRangeEnter(npc, player, isSummon);
++	}
++	
++	@Override
++	public String onAttack(Npc npc, Player attacker, int damage, boolean isSummon, Skill skill)
++	{
++		if (npc.getId() == MAIN_BOSS_ID)
++		{
++			if (!barrierActivated)
++			{
++				barrierActivated = true;
++				LIMIT_BARRIER.getSkill().applyEffects(npc, npc);
++				npc.setInvul(true);
++				startQuestTimer("remove_barrier", BARRIER_DURATION_MILLIS, npc, null);
++				queenAntHits.put(npc, 0);
++			}
++			
++			if (vulnerablePhase)
++			{
++				int hits = queenAntHits.getOrDefault(npc, 0) + 1;
++				queenAntHits.put(npc, hits);
++				
++				if (hits >= HIT_COUNT_RENEW)
++				{
++					cancelQuestTimer("activate_barrier", npc, null);
++					startQuestTimer("activate_barrier", RENEW_DURATION_MILLIS, npc, null);
++					queenAntHits.put(npc, 0);
++				}
++			}
++			else
++			{
++				int hits = queenAntHits.getOrDefault(npc, 0) + 1;
++				queenAntHits.put(npc, hits);
++				
++				if (hits >= HIT_COUNT)
++				{
++					npc.stopSkillEffects(LIMIT_BARRIER.getSkill());
++					npc.setInvul(false);
++					cancelQuestTimer("remove_barrier", npc, null);
++					vulnerablePhase = true;
++					startQuestTimer("activate_barrier", RENEW_DURATION_MILLIS, npc, null);
++					queenAntHits.put(npc, 0);
++				}
++			}
++			
++			ArenaZone arenaZone = ZoneManager.getInstance().getZoneById(9908099, ArenaZone.class);
++			if ((arenaZone != null) && !arenaZone.isInsideZone(attacker))
++			{
++				attacker.teleToLocation(GLUDIO_LOCATION, false);
++				return null;
++			}
++			
++			lastAttackTime = System.currentTimeMillis();
++			bossInCombat = true;
++			
++			if (!hp85Reached && (npc.getCurrentHp() < (npc.getMaxHp() * 0.85)))
++			{
++				hp85Reached = true;
++				activateSpecialMechanics(npc);
++			}
++			if (isPlayerInValidCommandChannel(attacker))
++			{
++				CommandChannel cc = attacker.getParty().getCommandChannel();
++				for (Player member : cc.getMembers())
++				{
++					if (member.getLevel() < 110)
++					{
++						attacker.teleToLocation(GLUDIO_LOCATION, false);
++						return null;
++					}
++				}
++			}
++			else
++			{
++				if (attacker.getLevel() < 110)
++				{
++					attacker.teleToLocation(GLUDIO_LOCATION, false);
++					return null;
++				}
++			}
++			if (!isPlayerInValidCommandChannel(attacker))
++			{
++				attacker.teleToLocation(GLUDIO_LOCATION, false);
++				return null;
++			}
++		}
++		return super.onAttack(npc, attacker, damage, isSummon, skill);
++	}
++	
++	private boolean isPlayerInValidCommandChannel(Player player)
++	{
++		Party party = player.getParty();
++		if (party == null)
++		{
++			return false;
++		}
++		
++		CommandChannel cc = party.getCommandChannel();
++		if ((cc == null) || (cc.getMemberCount() < REQUIRED_CC_MEMBERS))
++		{
++			return false;
++		}
++		
++		return true;
++	}
++	
++	private void activateSpecialMechanics(Npc npc)
++	{
++		startQuestTimer("useAreaSkill", 1000, npc, null);
++		startQuestTimer("repeatSpecialMechanics", 30000, npc, null, true);
++	}
++	
++	private void useAreaSkill(Npc npc)
++	{
++		if (!canUseSkill.get() || (npc == null) || npc.isDead() || !bossInCombat)
++		{
++			return;
++		}
++		isUsingAreaSkill.set(true);
++		
++		ThreadPool.schedule(() ->
++		{
++			if (!npc.isDead() && bossInCombat)
++			{
++				isDebuffImmunityActive = true;
++				cancelDebuffs(npc);
++				
++				ThreadPool.schedule(() -> isDebuffImmunityActive = false, 7000);
++			}
++		}, 1000);
++		
++		ThreadPool.schedule(() ->
++		{
++			if (bossInCombat)
++			{
++				npc.disableSkill(COMMON_SKILL_1.getSkill(), 7000);
++				npc.disableSkill(COMMON_SKILL_2.getSkill(), 7000);
++				
++				ThreadPool.schedule(() ->
++				{
++					if (!npc.isDead() && bossInCombat)
++					{
++						isUsingAreaSkill.set(false);
++					}
++				}, 6000);
++			}
++		}, 1000);
++		
++		npc.enableAllSkills();
++		
++		final Location bossLocation = npc.getLocation();
++		List<Npc> spawnedNpcs = new ArrayList<>();
++		
++		ThreadPool.schedule(() ->
++		{
++			if (!npc.isDead() && bossInCombat)
++			{
++				npc.doCast(INITIAL_SKILL.getSkill());
++			}
++			
++			for (int i = 0; i < 10; i++)
++			{
++				if (!bossInCombat)
++				{
++					break;
++				}
++				
++				int offsetX = getRandom(-1000, 1000);
++				int offsetY = getRandom(-900, 1000);
++				
++				Location targetLocation = new Location(bossLocation.getX() + offsetX, bossLocation.getY() + offsetY, bossLocation.getZ());
++				Npc tempNpc = addSpawn(INVISIBLE_NPC, targetLocation, false, NPC_LIFETIME);
++				
++				if (tempNpc != null)
++				{
++					spawnedNpcs.add(tempNpc);
++					
++					ThreadPool.schedule(() ->
++					{
++						if (!tempNpc.isDead() && SkillCaster.checkUseConditions(tempNpc, INITIAL_SKILL.getSkill()))
++						{
++							SkillCaster.triggerCast(tempNpc, tempNpc, INITIAL_SKILL.getSkill());
++						}
++					}, 1000);
++					
++					ThreadPool.schedule(() ->
++					{
++						if (!tempNpc.isDead() && SkillCaster.checkUseConditions(tempNpc, AREA_SKILL.getSkill()))
++						{
++							SkillCaster.triggerCast(tempNpc, tempNpc, AREA_SKILL.getSkill());
++						}
++					}, 4000);
++				}
++			}
++			
++		}, 4000);
++	}
++	
++	private void cancelDebuffs(Npc npc)
++	{
++		if ((npc == null) || npc.isDead() || !isDebuffImmunityActive)
++		{
++			return;
++		}
++		npc.getEffectList().getEffects().stream().filter(effect -> isDebuff(effect.getSkill())).forEach(effect -> npc.getEffectList().stopSkillEffects(SkillFinishType.REMOVED, effect.getSkill()));
++	}
++	
++	private boolean isDebuff(Skill skill)
++	{
++		return (skill != null) && skill.isDebuff();
++	}
++	
++	@Override
++	public String onEvent(String event, Npc npc, Player player)
++	{
++		if ((npc != null) && (npc.getId() == MAIN_BOSS_ID))
++		{
++			switch (event)
++			{
++				case "queen_ant_barrier_start":
++					break;
++				
++				case "activate_barrier":
++					barrierActivated = true;
++					LIMIT_BARRIER.getSkill().applyEffects(npc, npc);
++					npc.setInvul(true);
++					vulnerablePhase = false;
++					startQuestTimer("remove_barrier", BARRIER_DURATION_MILLIS, npc, null);
++					queenAntHits.put(npc, 0);
++					break;
++				
++				case "remove_barrier":
++					barrierActivated = false;
++					npc.stopSkillEffects(LIMIT_BARRIER.getSkill());
++					npc.setInvul(false);
++					queenAntHits.put(npc, 0);
++					break;
++				case "check_arena":
++					if ((spawnedMainBoss != null) && !spawnedMainBoss.isDead())
++					{
++						checkBossInArena(spawnedMainBoss);
++					}
++					break;
++				case "useAreaSkill":
++				{
++					useAreaSkill(npc);
++					break;
++				}
++				case "repeatSpecialMechanics":
++				{
++					if (!npc.isDead() && bossInCombat)
++					{
++						useAreaSkill(npc);
++						startQuestTimer("repeatSpecialMechanics", 30000, npc, null, true);
++					}
++					else
++					{
++						cancelQuestTimer("repeatSpecialMechanics", npc, null);
++					}
++					break;
++				}
++				case "checkCombatStatus":
++				{
++					checkCombatStatus(npc);
++					break;
++				}
++			}
++		}
++		return super.onEvent(event, npc, player);
++	}
++	
++	private void checkCombatStatus(Npc npc)
++	{
++		if (((System.currentTimeMillis() - lastAttackTime) > 10000))
++		{
++			bossInCombat = false;
++			hp85Reached = false;
++			cancelQuestTimer("repeatSpecialMechanics", npc, null);
++		}
++		else
++		{
++			bossInCombat = true;
++		}
++	}
++	
++	private void checkBossInArena(Npc npc)
++	{
++		if ((npc == null) || npc.isDead())
++		{
++			return;
++		}
++		
++		ArenaZone arenaZone = ZoneManager.getInstance().getZoneById(9908099, ArenaZone.class);
++		if ((arenaZone != null) && !arenaZone.isInsideZone(npc))
++		{
++			
++			npc.teleToLocation(SPAWN_LOCATION, false);
++			npc.setCurrentHp(npc.getMaxHp());
++			npc.setCurrentMp(npc.getMaxMp());
++			
++			return;
++		}
++	}
++	
++	@Override
++	public String onKill(Npc npc, Player killer, boolean isSummon)
++	{
++		if (npc == spawnedMainBoss)
++		{
++			cancelQuestTimer("repeatSpecialMechanics", npc, null);
++			cancelQuestTimer("checkCombatStatus", npc, null);
++			cancelQuestTimers("check_arena");
++			GrandBossManager.getInstance().setStatus(MAIN_BOSS_ID, 1);
++			spawnedMainBoss = null;
++			hp85Reached = false;
++			bossInCombat = false;
++			
++			final long currentTime = System.currentTimeMillis();
++			GlobalVariablesManager.getInstance().set("QUEEN_ANT_LAST_DEATH_TIME", currentTime);
++			LOGGER.info("Queen Ant: Boss killed. Last death time recorded: " + currentTime + " / " + new java.util.Date(currentTime));
++		}
++		return super.onKill(npc, killer, isSummon);
+ 	}
+ 	
+ 	public static void main(String[] args)
+ 	{
+ 		new QueenAnt();
+ 	}
+-}
++}
+\ No newline at end of file
+diff --git L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/npcs/29300-29399.xml L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/npcs/29300-29399.xml
+index b62002d..7698db8 100644
+--- L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/npcs/29300-29399.xml
++++ L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/npcs/29300-29399.xml
+@@ -5490,12 +5490,17 @@
+ 		</collision>
+ 	</npc>
+ 	<npc id="29381" level="127" type="GrandBoss" name="Queen Ant" title="Wasteland Mistress">
++		<parameters>
++			<skill name="Skill1" id="33915" level="1" />
++			<skill name="Skill2" id="33916" level="1" />
++			<param name="show_activated" value="0" />
++		</parameters>
+ 		<race>BUG</race>
+ 		<sex>FEMALE</sex>
+ 		<acquire exp="5337882368" sp="4804094" />
+ 		<stats str="164" int="188" dex="55" wit="78" con="111" men="149">
+ 			<vitals hp="800175145" hpRegen="208" mp="68076" mpRegen="4.5" />
+-			<attack physical="1599215" magical="145753" random="30" critical="4.75" accuracy="4.75" attackSpeed="598" type="SWORD" range="40" distance="80" width="120" />
++			<attack physical="1599215" magical="145753" random="30" critical="4.75" accuracy="4.75" attackSpeed="598" type="SWORD" range="150" distance="80" width="120" />
+ 			<defence physical="753240" magical="364523" evasion="-18" />
+ 			<attribute>
+ 				<attack type="EARTH" value="2550" />
+@@ -5505,7 +5510,7 @@
+ 				<walk ground="80" />
+ 				<run ground="130" />
+ 			</speed>
+-			<hitTime>370</hitTime>
++			<hitTime>970</hitTime>
+ 			<abnormalResist physical="230" magical="230" />
+ 		</stats>
+ 		<status undying="false" noSleepMode="true" />
+@@ -5514,12 +5519,16 @@
+ 			<skill id="5465" level="1" /> <!-- Earth Attribute -->
+ 			<skill id="32909" level="1" /> <!-- Rule of Looting -->
+ 			<skill id="32675" level="1" /> <!-- Improved Immunity -->
++			<skill id="9905099" level="1" /> <!-- Improved Immunity Custom -->
+ 			<skill id="14765" level="4" /> <!-- Blood Siphon Resistance -->
+ 			<skill id="14804" level="10" /> <!-- Damage Reflection Resistance -->
++			<skill id="34814" level="9" /> <!-- Critical Rate Resistance -->
++			<skill id="34815" level="9" /> <!-- Critical Damage Resistance -->
++			<skill id="34820" level="7" /> <!-- Received Damage Resistance -->
++			<skill id="33915" level="1" /> <!-- Queen's Rage -->
++			<skill id="33916" level="1" /> <!-- Ground Shaker -->
+ 		</skillList>
+-		<corpseTime>300</corpseTime>
+-		<exCrtEffect>true</exCrtEffect>
+-		<ai type="BALANCED" clanHelpRange="2000" aggroRange="2000">
++		<ai type="MAGE" clanHelpRange="2000" aggroRange="2000">
+ 			<clanList>
+ 				<clan>QUEEN_ANT</clan>
+ 			</clanList>
+diff --git L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/skills/33900-33999.xml L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/skills/33900-33999.xml
+index 45a372a..ba168db 100644
+--- L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/skills/33900-33999.xml
++++ L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/skills/33900-33999.xml
+@@ -4,20 +4,128 @@
+ 		<!-- The Queen Ant attacks an area at the front. -->
+ 		<icon>icon.skill33915</icon>
+ 		<operateType>A1</operateType>
++		<isMagic>1</isMagic>
++		<hitTime>1200</hitTime>
++		<coolTime>800</coolTime>
++		<abnormalLevel>5</abnormalLevel>
++		<abnormalTime>3</abnormalTime>
++		<activateRate>900</activateRate>
++		<basicProperty>NONE</basicProperty>
++		<castRange>700</castRange>
++		<effectPoint>-250</effectPoint>
++		<effectRange>1100</effectRange>
++		<lvlBonusRate>100</lvlBonusRate>
++		<reuseDelay>500</reuseDelay>
++		<magicCriticalRate>-5</magicCriticalRate>
++		<affectLimit>5-12</affectLimit>
++		<affectRange>800</affectRange>
++		<fanRange>0;0;1300;300</fanRange>
++		<attributeType>EARTH</attributeType>
++		<attributeValue>2000</attributeValue>
++		<targetType>ENEMY</targetType>
++		<affectScope>SQUARE</affectScope>
++		<affectObject>NOT_FRIEND</affectObject>
++		<effects>
++			<effect name="PhysicalAttack">
++				<power>6250000</power>
++				<criticalChance>40</criticalChance>
++			</effect>
++		</effects>
+ 	</skill>
+ 	<skill id="33916" toLevel="1" name="Ground Shaker">
+ 		<!-- The Queen Ant attacks the enemy. Inflicted status: Confusion (Fear, Aerial Yoke, Faint, Charm, Stun, Paralysis, Knockback, Knockdown). -->
+ 		<icon>icon.skill33916</icon>
+-		<operateType>A1</operateType>
++		<operateType>A2</operateType>
++		<isDebuff>true</isDebuff>
++		<castRange>1000</castRange>
++		<reuseDelay>21000</reuseDelay>
++		<hitTime>2100</hitTime>
++		<coolTime>1400</coolTime>
++		<effectPoint>-100</effectPoint>
++		<abnormalType>STUN</abnormalType>
++		<abnormalVisualEffect>STUN</abnormalVisualEffect>
++		<abnormalResists>TURN_FLEE;KNOCKDOWN;DEPORT;SILENCE;PARALYZE;ABSORB;DISARM;SILENCE_PHYSICAL;SILENCE_ALL;CHANGEBODY;TURN_STONE;DERANGEMENT;AIRBIND;SLEEP;OBLIVION;MIRAGE;MIRAGE_TRAP;ROOT_MAGICALLY;ROOT_PHYSICALLY;STUN;PUBLIC_SLOT</abnormalResists>
++		<basicProperty>NONE</basicProperty>
++		<magicCriticalRate>-5</magicCriticalRate>
++		<magicLevel>127</magicLevel>
++		<abnormalLevel>1</abnormalLevel>
++		<abnormalTime>5</abnormalTime>
++		<trait>SHOCK</trait>
++		<attributeType>EARTH</attributeType>
++		<attributeValue>2000</attributeValue>
++		<affectRange>2000</affectRange>
++		<targetType>SELF</targetType>
++		<affectScope>POINT_BLANK</affectScope>
++		<affectObject>NOT_FRIEND</affectObject>
++		<effects>
++			<effect name="PhysicalAttack">
++				<power>60900000</power>
++				<overHit>true</overHit>
++				<criticalChance>
++					<value fromLevel="1" toLevel="9">9</value>
++					<value fromLevel="1" toLevel="9" fromSubLevel="2001" toSubLevel="2020">{base + (base / 100 * subIndex)}</value>
++				</criticalChance>
++			</effect>
++			<effect name="BlockActions">
++				<allowedSkills>10279;10517;10025;10776;11770;1904;11264;11093;13314;1912;7002;18721;18722;28203;30516;35190</allowedSkills>
++			</effect>
++		</effects>
+ 	</skill>
+ 	<skill id="33917" toLevel="1" name="Ant Hole">
+ 		<icon>icon.skill33917</icon>
+-		<operateType>A1</operateType>
++		<isMagic>7</isMagic>
++		<hitTime>6000</hitTime>
++		<coolTime>500</coolTime>
++		<effectPoint>-100</effectPoint>
++		<affectLimit>5-12</affectLimit>
++		<abnormalTime>5</abnormalTime>
++		<abnormalLevel>2</abnormalLevel>
++		<activateRate>900</activateRate>
++		<magicLevel>105</magicLevel>
++		<operateType>A2</operateType>
++		<coolTime>500</coolTime>
++		<reuseDelay>25000</reuseDelay>
++		<magicCriticalRate>5</magicCriticalRate>
++		<targetType>SELF</targetType>
++		<affectScope>POINT_BLANK</affectScope>
++		<affectObject>NOT_FRIEND</affectObject>
+ 	</skill>
+ 	<skill id="33918" toLevel="1" name="Ant Hole">
+ 		<!-- Pulls nearby enemies to the ant hole. Inflicted status: Danger Zone. -->
+ 		<icon>icon.skill33917</icon>
+-		<operateType>A1</operateType>
++		<affectLimit>5-12</affectLimit>
++		<abnormalTime>4</abnormalTime>
++		<abnormalLevel>2</abnormalLevel>
++		<activateRate>900</activateRate>
++		<affectRange>500</affectRange>
++		<basicProperty>PHYSICAL</basicProperty>
++		<attributeType>EARTH</attributeType>
++		<attributeValue>2000</attributeValue>
++		<affectHeight>-100;200</affectHeight>
++		<effectPoint>-5000</effectPoint>
++		<isDebuff>true</isDebuff>
++		<magicLevel>128</magicLevel>
++		<operateType>A2</operateType>
++		<coolTime>500</coolTime>
++		<reuseDelay>5000</reuseDelay>
++		<magicCriticalRate>5</magicCriticalRate>
++		<trait>PULL</trait>
++		<targetType>SELF</targetType>
++		<affectScope>POINT_BLANK</affectScope>
++		<affectObject>NOT_FRIEND</affectObject>
++		<hitTime>3000</hitTime>
++		<effects>
++			<effect name="PullBack">
++				<speed>600</speed>
++			</effect>
++			<effect name="DefenceTrait">
++				<PULL>100</PULL>
++			</effect>
++			<effect name="PhysicalAttack">
++				<power>48600000</power>
++				<criticalChance>300</criticalChance>
++			</effect>
++		</effects>
+ 	</skill>
+ 	<skill id="33919" toLevel="2" name="Ground Shaker">
+ 		<!-- A Queen Ant's attack inflicts Stun. Inflicted status: Confusion (Fear, Aerial Yoke, Faint, Charm, Stun, Paralysis, Knockback, Knockdown). -->
+diff --git L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/skills/custom/ResistanceDebuffToBoss.xml L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/skills/custom/ResistanceDebuffToBoss.xml
+new file mode 100644
+index 0000000..954a493
+--- /dev/null
++++ L2J_Mobius_11.3_Shinemaker/dist/game/data/stats/skills/custom/ResistanceDebuffToBoss.xml
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<list xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../xsd/skills.xsd">
++	<skill id="9905099" toLevel="1" name="Improved Immunity">
++		<!-- Immunity to all debuffs critical in Boss. -->
++		<icon>icon.skill1411</icon>
++		<operateType>P</operateType>
++		<magicCriticalRate>-5</magicCriticalRate>
++		<effects>
++			<effect name="BlockAbnormalSlot">
++				<slot>AIRBIND;DERANGEMENT;CHANGEBODY;SLEEP;PARALYZE;KNOCKDOWN;TURN_STONE;STUN;SILENCE;SHILLIEN_STUN;SAYHAS_RING;SILENCE_PHYSICAL;ROOT_MAGICALLY</slot>
++			</effect>
++		</effects>
++	</skill>
++</list>
+diff --git L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/QueenAntsLair.xml L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/QueenAntsLair.xml
+new file mode 100644
+index 0000000..4882291
+--- /dev/null
++++ L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/QueenAntsLair.xml
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<list enabled="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/zones.xsd">
++    <zone id="9908099" name="Lairs Queen Ant" type="ArenaZone" shape="NPoly" minZ="-3900" maxZ="-2200">
++        <node X="-8658" Y="185667" />
++        <node X="-10613" Y="185228" />
++        <node X="-11121" Y="182156" />
++        <node X="-10246" Y="180500" />
++        <node X="-8763" Y="180013" />
++        <node X="-6144" Y="180164" />
++        <node X="-4405" Y="181431" />
++        <node X="-4026" Y="185137" />
++        <node X="-7370" Y="186216" />
++    </zone>
++</list>
+\ No newline at end of file
+diff --git L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_bookmark.xml L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_bookmark.xml
+index 6843d24..62105de 100644
+--- L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_bookmark.xml
++++ L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_bookmark.xml
+@@ -8300,4 +8300,16 @@
+ 		<node X="-87121" Y="211950" />
+ 		<node X="-82180" Y="211846" />
+ 	</zone>
++	<zone name="no_bookmark_Queen_Ants_Lair" type="ConditionZone" shape="NPoly" minZ="-3900" maxZ="-2200">
++		<stat name="NoBookmark" val="true" />
++        <node X="-8658" Y="185667" />
++        <node X="-10613" Y="185228" />
++        <node X="-11121" Y="182156" />
++        <node X="-10246" Y="180500" />
++        <node X="-8763" Y="180013" />
++        <node X="-6144" Y="180164" />
++        <node X="-4405" Y="181431" />
++        <node X="-4026" Y="185137" />
++        <node X="-7370" Y="186216" />
++    </zone>
+ </list>
+\ No newline at end of file
+diff --git L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_summon_friend.xml L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_summon_friend.xml
+index c44ca77..ab11b9f 100644
+--- L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_summon_friend.xml
++++ L2J_Mobius_11.3_Shinemaker/dist/game/data/zones/no_summon_friend.xml
+@@ -295,4 +295,15 @@
+ 		<node X="-87121" Y="211950" />
+ 		<node X="-82180" Y="211846" />
+ 	</zone>
++		<zone name="Queen Ants Lair NoSummon" type="NoSummonFriendZone" shape="NPoly" minZ="-3900" maxZ="-2200">
++        <node X="-8658" Y="185667" />
++        <node X="-10613" Y="185228" />
++        <node X="-11121" Y="182156" />
++        <node X="-10246" Y="180500" />
++        <node X="-8763" Y="180013" />
++        <node X="-6144" Y="180164" />
++        <node X="-4405" Y="181431" />
++        <node X="-4026" Y="185137" />
++        <node X="-7370" Y="186216" />
++    </zone>
+ </list>
+\ No newline at end of file
